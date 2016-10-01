@@ -1,0 +1,650 @@
+requirejs(['lib/socket.io', 'lib/howler', 'lib/processing'], function (socketIO) {
+
+    var imagesDir = 'img/';
+    var soundsDir = 'sounds/';
+
+    var me = this;
+    ////////////////////////////////////////////////////////////////////////////////
+    // connector
+    me.socket = socketIO();
+
+    // handle challenge-accepted message
+    me.socket.on('battleship:challenge-accepted', function (opponent) {
+        if (!me.gameStarted) {
+            me.gameStarted = true;
+            me.gameMenu = false;
+            me.socket.emit('battleship:message', {
+                message: 'battleship:start-game'
+            });
+        }
+    });
+
+    // handle starting the game
+    me.socket.on('battleship:start-game', function () {
+        if (!me.gameStarted) {
+            //pegs.length = 0;
+
+            me.gameStarted = true;
+            me.gameMenu = false;
+
+            // the challenged user gets to go first
+            me.myTurn = true;
+        }
+    });
+
+    // game canvas
+    me.game = document.querySelector('#battleship-canvas');
+
+    // sketch process
+    function sketchProcess(processing) {
+        ////////////////////////////////////////////////////////////////////////////
+        // mobile flag
+        var isMobile = window.innerWidth < 1200;
+
+        // canvas width and height
+        var width = isMobile ? window.innerWidth : 1150;
+        var height = isMobile ? width : 600;
+
+        // grids
+        var gridX = isMobile ? 0 : 50;
+        var gridY = isMobile ? 0 : 50;
+        var grid2X = isMobile ? gridX : 600;
+        var grid2Y = isMobile ? gridY : 50;
+
+        var gridWidth = isMobile ? width : 500;
+        var gridHeight = isMobile ? gridWidth : 500;
+        var cellWidth = gridWidth / 10;
+        var cellHeight = gridHeight / 10;
+
+        // pieces
+        var ships;
+        var ships2;
+        var pegs;
+        var pegs2;
+
+        // animations
+        var explosions;
+        var gameOverExplosion;
+
+        // images
+        var gridImg;
+        var grid2Img;
+        var youLoseImg;
+        var imSorryButtonImg;
+        var youWinImg;
+        var thankYouButtonImg;
+        var explosionImage;
+        var menuImage;
+
+        var opacy;
+
+        // grids
+        var grid;
+        var grid2;
+
+        //
+        var totalHitCount = 17;
+
+        ////////////////////////////////////////////////////////////////////////////
+        // reset variables
+        function resetVariables() {
+            // ships
+            ships = [];
+            ships2 = [];
+
+            // pegs
+            pegs = [];
+            pegs2 = [];
+
+            // animations
+            explosions = [];
+            gameOverExplosion = undefined;
+            opacy = 0.0;
+
+            // create left grid
+            grid = create2dArray(10);
+            for (var i = 0; i < 10; i++) {
+                for (var j = 0; j < 10; j++) {
+                    grid[i][j] = {
+                        x: ((cellWidth * i) + cellWidth / 2) + gridX,
+                        y: ((cellHeight * j) + cellHeight / 2) + gridY,
+                        firedOn: false,
+                        occupied: false
+                    };
+                }
+            }
+
+            // create right grid
+            grid2 = create2dArray(10);
+            for (var i = 0; i < 10; i++) {
+                for (var j = 0; j < 10; j++) {
+                    grid2[i][j] = {
+                        x: ((cellWidth * i) + cellWidth / 2) + grid2X,
+                        y: ((cellHeight * j) + cellHeight / 2) + grid2Y,
+                        firedOn: false,
+                        occupied: false
+                    };
+                }
+            }
+
+            // add ships
+            addShips();
+
+            // game regulators
+            me.hitCount = 0;
+            me.gameStarted = false;
+            me.gameOver = false;
+            me.waiting = false;
+            me.myTurn = false;
+            me.gameMenu = true;
+        }
+        resetVariables();
+
+        ////////////////////////////////////////////////////////////////////////////
+        // sprite
+        function sprite(options) {
+            var that = {},
+                frameIndex = 0,
+                tickCount = 0,
+                ticksPerFrame = options.ticksPerFrame,
+                numberOfFrames = 48,
+                frameRow = 0,
+                frameCol = 0;
+
+            that.context = options.context;
+            that.width = options.width;
+            that.height = options.height;
+            that.image = options.image;
+            that.colNum = options.colNum;
+            that.rowNum = options.rowNum;
+            that.active = true;
+            that.scale = options.scale;
+
+            that.render = function (x, y) {
+                that.context.drawImage(
+                    that.image,
+                    frameCol * that.width,
+                    frameRow * that.height,
+                    that.width,
+                    that.height,
+                    x - ((that.width * that.scale) / 2),
+                    y - ((that.height * that.scale) / 2),
+                    that.width * that.scale,
+                    that.height * that.scale
+                );
+            };
+
+            that.update = function () {
+                tickCount += 1;
+                if (tickCount > ticksPerFrame) {
+                    tickCount = 0;
+
+                    if (frameIndex < numberOfFrames - 1) {
+                        frameIndex += 1;
+                        frameCol += 1;
+                        if (frameCol >= that.colNum) {
+                            frameRow += 1;
+                            frameCol = 0;
+                        }
+                        if (frameRow >= that.rowNum) {
+                            frameRow = 0;
+                            frameCol = 0;
+                        }
+                    } else {
+                        that.active = false;
+                    }
+                }
+            };
+
+            return that;
+        }
+
+        ////////////////////////////////////////////////////////////////////////////
+        // setup
+        processing.setup = function () {
+            gridImg = processing.loadImage(imagesDir + 'gridBackground.png');
+            grid2Img = processing.loadImage(imagesDir + 'grid2Background.png');
+            explosionImage = new Image();
+            explosionImage.src = imagesDir + 'explosion2.png';
+
+            youLoseImg = processing.loadImage(imagesDir + 'youlose.png');
+            imSorryButtonImg = processing.loadImage(imagesDir + 'imSorryButton.png');
+            youWinImg = processing.loadImage(imagesDir + 'youwin.png');
+            thankYouButtonImg = processing.loadImage(imagesDir + 'thankYouButton.png');
+
+            menuImage = processing.loadImage(imagesDir + 'menu.png');
+
+            // set size
+            processing.size(width + 1, height + 1);
+            processing.frameRate(48);
+        };
+
+        ////////////////////////////////////////////////////////////////////////////
+        // draw grid lines
+        var drawGrid = function (gX, gY) {
+            for (var i = 0; i <= 10; i++) {
+                processing.line((cellWidth * i) + gX, gY, (cellWidth * i) + gX, gridHeight + gY);
+                processing.line(gX, (cellHeight * i) + gY, gridWidth + gX, (cellHeight * i) + gY);
+            }
+        };
+
+        // draw function
+        processing.draw = function () {
+            if (me.gameMenu) {
+                processing.image(menuImage, 0, 0, width, height);
+            } else {
+                //background
+                processing.fill(100);
+                processing.rect(0, 0, width, height);
+
+                if (isMobile) {
+                    if (me.myTurn || me.waiting) {
+                        processing.image(gridImg, gridX, gridY, gridWidth, gridHeight);
+                        drawGrid(gridX, gridY);
+                        drawShips(ships);
+                        drawPegs(pegs);
+                    } else {
+                        processing.image(grid2Img, grid2X, grid2Y, gridWidth, gridHeight);
+                        drawGrid(grid2X, grid2Y);
+                        drawShips(ships2);
+                        drawPegs(pegs2);
+                    }
+                } else {
+                    if (me.gameStarted) {
+                        if (me.myTurn || me.waiting) {
+                            processing.fill(0, 200, 0);
+                            processing.rect(gridX - 5, gridY - 5, gridWidth + 10, gridHeight + 10);
+                        } else {
+                            processing.fill(0, 200, 0);
+                            processing.rect(grid2X - 5, grid2Y - 5, gridWidth + 10, gridHeight + 10);
+                        }
+                    }
+
+                    // left grid
+                    processing.image(gridImg, gridX, gridY, gridWidth, gridHeight);
+                    drawGrid(gridX, gridY);
+
+                    // right grid
+                    processing.image(grid2Img, grid2X, grid2Y, gridWidth, gridHeight);
+                    drawGrid(grid2X, grid2Y);
+
+                    // pieces
+                    drawShips(ships);
+                    drawShips(ships2);
+                    drawPegs(pegs);
+                    drawPegs(pegs2);
+                }
+
+                // animations
+                drawExplosions();
+
+                // end of game
+                if (me.gameOver) {
+                    if (me.hitCount === totalHitCount) {
+                        drawYouLose();
+                    } else {
+                        drawYouWin();
+                    }
+                }
+            }
+        };
+
+
+        var drawYouWin = function () {
+            if (opacy < 255) {
+                opacy += 1.3;
+            }
+            processing.fill(255, opacy);
+            processing.rect(0, 0, width, height);
+
+            gameOverExplosion = gameOverExplosion ? gameOverExplosion : sprite({
+                context: me.game.getContext("2d"),
+                width: 256,
+                height: 256,
+                image: explosionImage,
+                colNum: 8,
+                rowNum: 6,
+                scale: isMobile ? 2 : 5,
+                ticksPerFrame: 4
+            });
+
+            if (gameOverExplosion.active) {
+                gameOverExplosion.update();
+                gameOverExplosion.render(width / 2, height / 2);
+            }
+
+            if (opacy >= 255) {
+                processing.imageMode(processing.CENTER);
+                processing.image(youWinImg, width / 2, height / 2, isMobile ? width * 3 / 4 : width / 2, height / 4);
+                processing.image(thankYouButtonImg, width / 2, 3 * (height / 4));
+                processing.imageMode(processing.CORNER);
+            }
+        };
+        var drawYouLose = function () {
+            if (opacy < 255) {
+                opacy += 1.3;
+            }
+            processing.fill(0, opacy);
+            processing.rect(0, 0, width, height);
+
+            gameOverExplosion = gameOverExplosion ? gameOverExplosion : sprite({
+                context: me.game.getContext("2d"),
+                width: 256,
+                height: 256,
+                image: explosionImage,
+                colNum: 8,
+                rowNum: 6,
+                scale: isMobile ? 2 : 5,
+                ticksPerFrame: 4
+            });
+
+            if (gameOverExplosion.active) {
+                gameOverExplosion.update();
+                gameOverExplosion.render(width / 2, height / 2);
+            }
+
+            if (opacy >= 255) {
+                processing.imageMode(processing.CENTER);
+                processing.image(youLoseImg, width / 2, height / 2, isMobile ? width * 3 / 4 : width / 2, height / 4);
+                processing.image(imSorryButtonImg, width / 2, 3 * (height / 4));
+                processing.imageMode(processing.CORNER);
+            }
+        };
+
+        function sendYourTurnMessage() {
+            // send to opponent
+            me.socket.emit('battleship:message', {
+                message: 'battleship:your-turn'
+            });
+            me.waiting = false;
+        }
+
+        processing.mouseClicked = function () {
+            if (me.gameOver) {
+                resetVariables();
+                me.socket.emit('battleship:message', {
+                    message: 'battleship:reset'
+                });
+            } else if (me.gameStarted && me.myTurn) {
+                for (var i = 0; i < 10; i++) {
+                    for (var j = 0; j < 10; j++) {
+                        if (pointIsInCell(grid, i, j, processing.mouseX, processing.mouseY)) {
+                            if (!grid[i][j].firedOn) {
+                                // send to opponent
+                                me.socket.emit('battleship:message', {
+                                    message: 'battleship:check-cell',
+                                    data: {
+                                        x: i,
+                                        y: j
+                                    }
+                                });
+
+                                me.waiting = true;
+                                me.myTurn = false;
+                                setTimeout(sendYourTurnMessage, 1500);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        function pointIsInCell(gridToCheck, i, j, x, y) {
+            if ((Math.abs(x - gridToCheck[i][j].x) < cellWidth / 2) && (Math.abs(y - gridToCheck[i][j].y) < cellHeight / 2)) {
+                return true;
+            }
+            return false;
+        }
+
+        function addExplosion(x, y) {
+            var explosion = sprite({
+                context: me.game.getContext("2d"),
+                width: 256,
+                height: 256,
+                image: explosionImage,
+                colNum: 8,
+                rowNum: 6,
+                scale: 0.3,
+                ticksPerFrame: 0
+            });
+
+            explosions.push({
+                x: x,
+                y: y,
+                exp: explosion
+            });
+        }
+
+        function handleCellCheck(data) {
+            if (!grid2[data.x][data.y].firedOn) {
+                if (grid2[data.x][data.y].occupied) {
+                    pegs2.push({
+                        x: grid2[data.x][data.y].x,
+                        y: grid2[data.x][data.y].y,
+                        color: 'red'
+                    });
+
+                    me.hitCount++;
+
+                    if (me.hitCount === totalHitCount) {
+                        playSound('hindenburg2.wav');
+                        me.socket.emit('battleship:message', {
+                            message: 'battleship:win'
+                        });
+                        me.gameOver = true;
+                    } else {
+                        playSound('oh_the_humanity.wav');
+                        addExplosion(grid2[data.x][data.y].x, grid2[data.x][data.y].y);
+
+                        me.socket.emit('battleship:message', {
+                            message: 'battleship:hit',
+                            data: {
+                                x: data.x,
+                                y: data.y
+                            }
+                        });
+                    }
+                } else {
+                    pegs2.push({
+                        x: grid2[data.x][data.y].x,
+                        y: grid2[data.x][data.y].y,
+                        color: 'white'
+                    });
+
+                    me.socket.emit('battleship:message', {
+                        message: 'battleship:miss',
+                        data: {
+                            x: data.x,
+                            y: data.y
+                        }
+                    });
+                }
+
+                grid2[data.x][data.y].firedOn = true;
+            }
+        }
+
+        function playSound(sound) {
+            var sound = new Howl({
+                urls: [soundsDir + sound]
+            }).play();
+        }
+
+        function handleHit(data) {
+            pegs.push({
+                x: grid[data.x][data.y].x,
+                y: grid[data.x][data.y].y,
+                color: 'red'
+            });
+            addExplosion(grid[data.x][data.y].x, grid[data.x][data.y].y);
+            var randomNumber = processing.random(0, 3);
+            if (randomNumber < 1) {
+                playSound('Killimanjaro.mp3');
+            } else if (randomNumber < 2) {
+                playSound('unfreakinbelievable_overkill.mp3');
+            } else {
+                playSound('pancake.wav');
+            }
+            me.hitOccurred = true;
+            grid[data.x][data.y].firedOn = true;
+        }
+
+        function handleMiss(data) {
+            pegs.push({
+                x: grid[data.x][data.y].x,
+                y: grid[data.x][data.y].y,
+                color: 'white'
+            });
+            if (me.hitOccurred) {
+                playSound(processing.random(0, 2) < 1 ? 'aintoverhere_stack.mp3' : 'almostgotme_stack.mp3');
+                me.hitOccurred = false;
+            }
+            grid[data.x][data.y].firedOn = true;
+        }
+
+        // add listeners
+        me.socket.on('battleship:check-cell', handleCellCheck);
+        me.socket.on('battleship:hit', handleHit);
+        me.socket.on('battleship:miss', handleMiss);
+        me.socket.on('battleship:win', function () {
+            playSound('that_view.wav');
+            me.gameOver = true;
+        });
+        me.socket.on('battleship:your-turn', function () {
+            me.myTurn = true;
+        });
+
+        var drawExplosions = function () {
+            for (var i = 0; i < explosions.length; i++) {
+                //if(explosions.exp.active) {
+                explosions[i].exp.update();
+                explosions[i].exp.render(explosions[i].x, explosions[i].y);
+                //}
+                //else {
+
+                //}
+            }
+        };
+        var drawPegs = function (pegsArray) {
+            for (var i = 0; i < pegsArray.length; i++) {
+                if (pegsArray[i].color === 'white') {
+                    processing.fill(255, 255, 255);
+                } else if (pegsArray[i].color === 'red') {
+                    processing.fill(255, 0, 0);
+                }
+                processing.ellipse(pegsArray[i].x, pegsArray[i].y, cellWidth * 0.4, cellHeight * 0.4);
+            }
+        };
+        var drawShips = function (shipsArray) {
+            var centerX;
+            var centerY;
+            for (var i = 0; i < shipsArray.length; i++) {
+                if (shipsArray[i].y1 === shipsArray[i].y2) {
+                    centerX = (shipsArray[i].x1 + shipsArray[i].x2) / 2;
+                    centerY = shipsArray[i].y1;
+                } else {
+                    centerX = shipsArray[i].x1;
+                    centerY = (shipsArray[i].y1 + shipsArray[i].y2) / 2;
+                }
+
+                processing.pushMatrix();
+
+                processing.translate(centerX, centerY);
+                processing.rotate(shipsArray[i].orientation < 1 ? 0 : processing.HALF_PI);
+                processing.imageMode(processing.CENTER);
+                var shipWidth = shipsArray[i].orientation < 1 ? Math.abs(shipsArray[i].x1 - shipsArray[i].x2) + cellWidth : Math.abs(shipsArray[i].y1 - shipsArray[i].y2) + cellHeight;
+                var shipHeight = shipsArray[i].orientation < 1 ? Math.abs(shipsArray[i].y1 - shipsArray[i].y2) + cellHeight : Math.abs(shipsArray[i].x1 - shipsArray[i].x2) + cellWidth;
+
+                processing.image(shipsArray[i].image, 0, 0, shipWidth, shipHeight);
+
+                processing.imageMode(processing.CORNER);
+
+                processing.popMatrix();
+            }
+        };
+
+        ////////////////////////////////////////////////////////////////////////////
+        // add a ship
+        function addShip(size, options) {
+            options = options || {};
+            options.variation = options.variation ? options.variation : '';
+
+            var xs = [];
+            var ys = [];
+            var overlap = true;
+            var orientation;
+
+            while (overlap) {
+                overlap = false;
+                xs = [];
+                ys = [];
+                //select orientation
+                orientation = options.orientation || processing.random(0, 2);
+
+                var xCoord;
+                var yCoord;
+                if (orientation <= 1) {
+                    xCoord = options.x || processing.random(0, (10 - size) + 1);
+                    yCoord = options.y || processing.random(0, 10);
+                    for (var i = parseInt(xCoord); i < (parseInt(xCoord) + size); i++) {
+                        if (grid2[i][parseInt(yCoord)].occupied === false) {
+                            xs.push(i);
+                            ys.push(parseInt(yCoord));
+                        } else {
+                            overlap = true;
+                            break;
+                        }
+                    }
+                } else {
+                    xCoord = options.x || processing.random(0, 10);
+                    yCoord = options.y || processing.random(0, (10 - size) + 1);
+                    for (var i = parseInt(yCoord); i < (parseInt(yCoord) + size); i++) {
+                        if (grid2[parseInt(xCoord)][i].occupied === false) {
+                            xs.push(parseInt(xCoord));
+                            ys.push(i);
+                        } else {
+                            overlap = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            for (var i = 0; i < size; i++) {
+                grid2[xs[i]][ys[i]].occupied = true;
+            }
+
+            ships2.push({
+                x1: grid2[xs[0]][ys[0]].x,
+                y1: grid2[xs[0]][ys[0]].y,
+                x2: grid2[xs[xs.length - 1]][ys[ys.length - 1]].x,
+                y2: grid2[xs[xs.length - 1]][ys[ys.length - 1]].y,
+                orientation: orientation,
+                image: processing.loadImage(imagesDir + size.toString() + options.variation + '.png')
+            });
+        }
+
+        // add all game ships
+        function addShips() {
+            addShip(5);
+            addShip(4);
+            addShip(3, {
+                variation: 'a'
+            });
+            addShip(3, {
+                variation: 'b'
+            });
+            addShip(2);
+        }
+    }
+
+    function create2dArray(rows) {
+        var arr = [];
+        for (var i = 0; i < rows; i++) {
+            arr[i] = [];
+        }
+        return arr;
+    }
+
+    // attach processing to game canvas
+    var p = new Processing(me.game, sketchProcess);
+});
