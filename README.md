@@ -1,6 +1,6 @@
 # Battleship
 
-An Express and Socket.io based implementation of the classic game, Battleship.
+An Express and Socket.io based implementation of Battleship.
 
 ## Features
 
@@ -17,3 +17,7 @@ An Express and Socket.io based implementation of the classic game, Battleship.
 
 - Possibly break out some of the battleship.js functionality into a separate library
 - Unit tests for both server and client-side functions
+
+# Website
+
+https://battleshipgame.herokuapp.com
