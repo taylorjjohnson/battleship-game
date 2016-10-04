@@ -13,6 +13,8 @@ An Express and Socket.io based implementation of Battleship.
 
 - Run: `gulp` to run the local server at `localhost:3000`, the gulp tasks include live reloading for views, css in public/css and restarting the server for changes to app.js or js in routes/
 
+- Note: This game requires at least two clients connected to the server to get past the starting screen and play.
+
 ## To-Do
 
 - Possibly break out some of the battleship.js functionality into a separate library
